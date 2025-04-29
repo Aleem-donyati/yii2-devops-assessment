@@ -1,4 +1,3 @@
-# Dockerfile
 FROM php:8.1-fpm
 
 # Install system dependencies
@@ -28,6 +27,10 @@ RUN mkdir -p /home/yii2/.composer && \
 
 # Set working directory
 WORKDIR /var/www
+
+# Create directory and set permissions BEFORE switching users
+RUN mkdir -p /var/www/basic && \
+    chown -R yii2:yii2 /var/www
 
 # Install Yii2 basic application
 USER yii2
