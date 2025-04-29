@@ -1,11 +1,11 @@
 # Yii2 DevOps Assessment Project
 
-This repository contains a complete DevOps setup for deploying a Yii2 PHP application on AWS using Docker Swarm, with NGINX as a reverse proxy, automated with Ansible, and continuous deployment via GitHub Actions.
+This repository contains a complete DevOps setup for deploying a Yii2 PHP application on AWS using Docker Swarm, with NGINX as a reverse proxy, automated with Ansible, and continuous deployment via GitHub Actions .
 
 ## Architecture Overview
 
 - **Application**: Yii2 PHP application running in Docker containers
-- **Container Orchestration**: Docker Swarm for high availability
+- **Container Orchestration**: Docker Swarm for highly available
 - **Reverse Proxy**: NGINX running on the host machine
 - **CI/CD**: GitHub Actions for automated building and deployment
 - **Infrastructure Automation**: Ansible for server setup and configuration
