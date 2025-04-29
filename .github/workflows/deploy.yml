@@ -41,6 +41,12 @@ jobs:
           git pull && \
           docker service update --image ${{ secrets.DOCKER_USERNAME }}/yii2-app:${{ github.sha }} yii2-app_app"
 
+      - name: Deploy to production
+  	    run: |
+    	    ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "mkdir -p /opt/yii2-app && \
+    	    docker service update --image ${{ secrets.DOCKER_USERNAME }}/yii2-app:${{ github.sha }} yii2-app_app || \
+          (cd /opt && docker stack deploy -c /home/${{ secrets.SSH_USER }}/docker-compose.yml yii2-app)"
+
       - name: Check deployment status
         run: |
           ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "docker service ls && docker service ps yii2-app_app"
