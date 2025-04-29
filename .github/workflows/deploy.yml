@@ -35,11 +35,11 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
 
-      - name: Deploy to production
-        run: |
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "cd /opt/yii2-app && \
-          git pull && \
-          docker service update --image ${{ secrets.DOCKER_USERNAME }}/yii2-app:${{ github.sha }} yii2-app_app"
+      # - name: Deploy to production
+      #   run: |
+      #     ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "cd /opt/yii2-app && \
+      #     git pull && \
+      #     docker service update --image ${{ secrets.DOCKER_USERNAME }}/yii2-app:${{ github.sha }} yii2-app_app"
 
       - name: Deploy to production
   	    run: |
