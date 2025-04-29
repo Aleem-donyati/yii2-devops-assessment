@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: ${DOCKER_USERNAME:-yourname}/yii2-app:${TAG:-latest}
+    volumes:
+      - yii2-app-data:/var/www/basic
+    environment:
+      - DB_HOST=db
+      - DB_NAME=yii2db
+      - DB_USER=yii2user
+      - DB_PASSWORD=yii2password
+    networks:
+      - yii2-network
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+      restart_policy:
+        condition: on-failure
+      healthcheck:
+        test: ["CMD", "curl", "-f", "http://localhost:9000/ping"]
+        interval: 1m
+        timeout: 10s
+        retries: 3
+        start_period: 40s
+
+  db:
+    image: mysql:8.0
+    volumes:
+      - yii2-db-data:/var/lib/mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=rootpassword
+      - MYSQL_DATABASE=yii2db
+      - MYSQL_USER=yii2user
+      - MYSQL_PASSWORD=yii2password
+    networks:
+      - yii2-network
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+networks:
+  yii2-network:
+    driver: overlay
+
+volumes:
+  yii2-app-data:
+  yii2-db-data:

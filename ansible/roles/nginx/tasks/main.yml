@@ -1,0 +1,41 @@
+---
+# roles/nginx/tasks/main.yml
+- name: Install NGINX
+  apt:
+    name: nginx
+    state: present
+
+- name: Create NGINX config directory
+  file:
+    path: /etc/nginx/sites-available
+    state: directory
+    mode: '0755'
+
+- name: Create NGINX sites-enabled directory
+  file:
+    path: /etc/nginx/sites-enabled
+    state: directory
+    mode: '0755'
+
+- name: Configure NGINX for Yii2 app
+  template:
+    src: yii2-app.conf.j2
+    dest: /etc/nginx/sites-available/{{ app_name }}.conf
+    mode: '0644'
+
+- name: Enable NGINX site
+  file:
+    src: /etc/nginx/sites-available/{{ app_name }}.conf
+    dest: /etc/nginx/sites-enabled/{{ app_name }}.conf
+    state: link
+
+- name: Remove default NGINX site
+  file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+
+- name: Start and enable NGINX service
+  systemd:
+    name: nginx
+    state: restarted
+    enabled: yes
