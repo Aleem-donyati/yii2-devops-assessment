@@ -15,6 +15,13 @@ services:
       - DB_PASSWORD=yii2password
     networks:
       - yii2-network
+    # Healthcheck moved outside of deploy section
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/ping"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     deploy:
       replicas: 2
       update_config:
@@ -23,12 +30,6 @@ services:
         order: start-first
       restart_policy:
         condition: on-failure
-      healthcheck:
-        test: ["CMD", "curl", "-f", "http://localhost:9000/ping"]
-        interval: 1m
-        timeout: 10s
-        retries: 3
-        start_period: 40s
 
   db:
     image: mysql:8.0
