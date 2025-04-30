@@ -8,7 +8,7 @@ server {
     access_log /var/log/nginx/yii2-access.log;
     error_log /var/log/nginx/yii2-error.log;
     
-    root /var/www/html/yii2/web;
+    root {{ www_dir }}/web;
     index index.php;
 
     location / {
