@@ -24,12 +24,46 @@ server {
     location ~ \.php$ {
         include fastcgi_params;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        
+        # Add important fastcgi parameters
+        fastcgi_param PATH_INFO $fastcgi_path_info;
+        fastcgi_param SCRIPT_NAME $fastcgi_script_name;
+        
         # Connect to the Docker Swarm service using the published port
         fastcgi_pass localhost:9000;
+        fastcgi_index index.php;
+        fastcgi_read_timeout 300;
+        fastcgi_buffer_size 128k;
+        fastcgi_buffers 4 256k;
+        fastcgi_busy_buffers_size 256k;
+        
         try_files $uri =404;
     }
 
+    # Increase response size for improved performance with large responses
+    proxy_buffer_size 128k;
+    proxy_buffers 4 256k;
+    proxy_busy_buffers_size 256k;
+
+    # Block access to hidden files
     location ~* /\. {
         deny all;
+        access_log off;
+        log_not_found off;
+    }
+    
+    # Block access to Yii system files
+    location ~* /(protected|framework|themes/\w+/views) {
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+
+    # Optimize static file serving
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+        expires max;
+        log_not_found off;
+        access_log off;
+        add_header Cache-Control "public, max-age=31536000";
     }
 }
