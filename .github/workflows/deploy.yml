@@ -9,10 +9,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
       
+      # Create directory structure
+      - name: Create directory structure
+        run: |
+          mkdir -p app
+          mkdir -p docker/nginx/conf.d
+          mkdir -p docker/php-fpm
+      
       # Download and extract Yii2 Basic Project
-      - name: Create app directory
-        run: mkdir -p app
-        
       - name: Download Yii2 Basic Project
         run: |
           composer create-project --prefer-dist yiisoft/yii2-app-basic app/basic
@@ -29,10 +33,31 @@ jobs:
           sed -i "s/'username' => 'root'/'username' => 'yii2user'/g" app/basic/config/db.php
           sed -i "s/'password' => ''/'password' => 'yii2password'/g" app/basic/config/db.php
       
+      # Create PHP-FPM configuration
+      - name: Create PHP-FPM configuration
+        run: |
+          cat > docker/php-fpm/www.conf << 'EOF'
+          [www]
+          user = yii2
+          group = www-data
+          listen = 0.0.0.0:9000
+          pm = dynamic
+          pm.max_children = 5
+          pm.start_servers = 2
+          pm.min_spare_servers = 1
+          pm.max_spare_servers = 3
+          pm.status_path = /status
+          ping.path = /ping
+
+          catch_workers_output = yes
+          access.log = /proc/self/fd/2
+          php_admin_value[error_log] = /proc/self/fd/2
+          php_admin_flag[log_errors] = on
+          EOF
+      
       # Create Nginx configuration
       - name: Create Nginx configuration
         run: |
-          mkdir -p docker/nginx/conf.d
           cat > docker/nginx/conf.d/default.conf << 'EOF'
           server {
               charset utf-8;
@@ -70,6 +95,130 @@ jobs:
           }
           EOF
       
+      # Create docker-compose.yml
+      - name: Create docker-compose.yml
+        run: |
+          cat > docker-compose.yml << 'EOF'
+          version: '3.8'
+          services:
+            app:
+              image: ${DOCKER_USERNAME:-yourname}/yii2-app:${TAG:-latest}
+              environment:
+                - YII_ENV=${YII_ENV:-prod}
+                - YII_DEBUG=${YII_DEBUG:-false}
+                - DB_HOST=db
+                - DB_NAME=yii2db
+                - DB_USER=yii2user
+                - DB_PASSWORD=yii2password
+              networks:
+                - yii2-network
+              deploy:
+                replicas: 2
+                update_config:
+                  parallelism: 1
+                  delay: 10s
+                  order: start-first
+                restart_policy:
+                  condition: on-failure
+
+            nginx:
+              image: nginx:alpine
+              volumes:
+                - ./docker/nginx/conf.d:/etc/nginx/conf.d
+              ports:
+                - "80:80"
+              depends_on:
+                - app
+              networks:
+                - yii2-network
+              deploy:
+                replicas: 1
+                restart_policy:
+                  condition: on-failure
+
+            db:
+              image: mysql:8.0
+              volumes:
+                - yii2-db-data:/var/lib/mysql
+              environment:
+                - MYSQL_ROOT_PASSWORD=rootpassword
+                - MYSQL_DATABASE=yii2db
+                - MYSQL_USER=yii2user
+                - MYSQL_PASSWORD=yii2password
+              networks:
+                - yii2-network
+              deploy:
+                replicas: 1
+                restart_policy:
+                  condition: on-failure
+
+          networks:
+            yii2-network:
+              driver: overlay
+
+          volumes:
+            yii2-db-data:
+          EOF
+      
+      # Create Dockerfile
+      - name: Create Dockerfile
+        run: |
+          cat > docker/Dockerfile << 'EOF'
+          FROM php:8.3-fpm
+
+          # Install system dependencies
+          RUN apt-get update && apt-get install -y \
+              git \
+              curl \
+              libpng-dev \
+              libonig-dev \
+              libxml2-dev \
+              zip \
+              unzip \
+              libzip-dev
+
+          # Clear cache
+          RUN apt-get clean && rm -rf /var/lib/apt/lists/*
+
+          # Install PHP extensions required by Yii2
+          RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd zip intl
+
+          # Get latest Composer
+          COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
+
+          # Create system user to run Composer and Yii Commands
+          RUN useradd -G www-data,root -u 1000 -d /home/yii2 yii2
+          RUN mkdir -p /home/yii2/.composer && \
+              chown -R yii2:yii2 /home/yii2
+
+          # Set working directory
+          WORKDIR /var/www
+
+          # Create app directories with proper permissions
+          RUN mkdir -p /var/www/basic/web/assets /var/www/basic/runtime && \
+              chown -R yii2:www-data /var/www/basic && \
+              chmod -R 775 /var/www/basic/web/assets /var/www/basic/runtime
+
+          # Copy application files
+          COPY ./app/basic /var/www/basic
+
+          # Install dependencies as yii2 user
+          USER yii2
+          WORKDIR /var/www/basic
+          RUN composer install --no-interaction
+
+          # Set proper file permissions
+          USER root
+          RUN chown -R yii2:www-data /var/www/basic
+          RUN chmod -R 755 /var/www/basic/web/assets /var/www/basic/runtime
+
+          # Configure PHP-FPM
+          COPY ./docker/php-fpm/www.conf /usr/local/etc/php-fpm.d/www.conf
+
+          EXPOSE 9000
+          CMD ["php-fpm"]
+          EOF
+      
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
       
@@ -93,102 +242,27 @@ jobs:
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
-      - name: Create docker-compose.yml
+      
+      - name: Create server directory structure
         run: |
-          cat > docker-compose.yml << 'EOF'
-          version: '3.8'
-          services:
-            app:
-              build:
-                context: .
-                dockerfile: docker/Dockerfile
-              image: \${DOCKER_USERNAME:-yourname}/yii2-app:\${TAG:-latest}
-              volumes:
-                - ./app/basic:/var/www/basic
-                - ./app/basic/runtime:/var/www/basic/runtime
-                - ./app/basic/web/assets:/var/www/basic/web/assets
-              environment:
-                - YII_ENV=\${YII_ENV:-prod}
-                - YII_DEBUG=\${YII_DEBUG:-false}
-                - DB_HOST=db
-                - DB_NAME=yii2db
-                - DB_USER=yii2user
-                - DB_PASSWORD=yii2password
-              networks:
-                - yii2-network
-              healthcheck:
-                test: ["CMD", "curl", "-f", "http://localhost:9000/ping"]
-                interval: 1m
-                timeout: 10s
-                retries: 3
-                start_period: 40s
-              deploy:
-                replicas: 2
-                update_config:
-                  parallelism: 1
-                  delay: 10s
-                  order: start-first
-                restart_policy:
-                  condition: on-failure
-      
-            nginx:
-              image: nginx:alpine
-              volumes:
-                - ./app/basic/web:/var/www/basic/web
-                - ./docker/nginx/conf.d:/etc/nginx/conf.d
-              ports:
-                - "80:80"
-              depends_on:
-                - app
-              networks:
-                - yii2-network
-              deploy:
-                replicas: 1
-                restart_policy:
-                  condition: on-failure
-      
-            db:
-              image: mysql:8.0
-              volumes:
-                - yii2-db-data:/var/lib/mysql
-              environment:
-                - MYSQL_ROOT_PASSWORD=rootpassword
-                - MYSQL_DATABASE=yii2db
-                - MYSQL_USER=yii2user
-                - MYSQL_PASSWORD=yii2password
-              networks:
-                - yii2-network
-              deploy:
-                replicas: 1
-                restart_policy:
-                  condition: on-failure
-      
-          networks:
-            yii2-network:
-              driver: overlay
-      
-          volumes:
-            yii2-db-data:
-          EOF
-
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "mkdir -p /home/${{ secrets.SSH_USER }}/docker/nginx/conf.d"
       
       - name: Copy docker-compose.yml and nginx config to server
         run: |
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "mkdir -p /home/${{ secrets.SSH_USER }}/docker/nginx/conf.d"
           scp ./docker-compose.yml ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }}:/home/${{ secrets.SSH_USER }}/docker-compose.yml
           scp ./docker/nginx/conf.d/default.conf ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }}:/home/${{ secrets.SSH_USER }}/docker/nginx/conf.d/default.conf
       
       - name: Initialize Docker Swarm (if not already)
         run: |
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "docker swarm init || echo 'Swarm already initialized'"
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "docker swarm init --advertise-addr=$(hostname -I | awk '{print $1}') || echo 'Swarm already initialized'"
       
       - name: Deploy to production
         run: |
           ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "cd /home/${{ secrets.SSH_USER }} && \
-          export DOCKER_USERNAME=${{ secrets.DOCKER_USERNAME }} && \
-          export TAG=${{ github.sha }} && \
-          export YII_ENV=prod && \
-          export YII_DEBUG=false && \
+          DOCKER_USERNAME=${{ secrets.DOCKER_USERNAME }} \
+          TAG=${{ github.sha }} \
+          YII_ENV=prod \
+          YII_DEBUG=false \
           docker stack deploy -c docker-compose.yml yii2-app"
       
       - name: Check deployment status
