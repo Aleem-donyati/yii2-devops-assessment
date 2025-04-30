@@ -55,47 +55,7 @@ jobs:
           php_admin_flag[log_errors] = on
           EOF
       
-      # Create Nginx configuration
-      - name: Create Nginx configuration
-        run: |
-          cat > docker/nginx/conf.d/default.conf << 'EOF'
-          server {
-              charset utf-8;
-              client_max_body_size 128M;
-
-              listen 80;
-              server_name localhost;
-
-              root /var/www/basic/web;
-              index index.php;
-
-              access_log /var/log/nginx/yii2-access.log;
-              error_log /var/log/nginx/yii2-error.log;
-
-              location / {
-                  # Redirect everything that isn't a real file to index.php
-                  try_files $uri $uri/ /index.php$is_args$args;
-              }
-
-              # deny accessing php files for the /assets directory
-              location ~ ^/assets/.*\.php$ {
-                  deny all;
-              }
-
-              location ~ \.php$ {
-                  include fastcgi_params;
-                  fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-                  fastcgi_pass app:9000;
-                  try_files $uri =404;
-              }
-
-              location ~* /\. {
-                  deny all;
-              }
-          }
-          EOF
-      
-      # Create docker-compose.yml
+      # Create docker-compose.yml (without NGINX service)
       - name: Create docker-compose.yml
         run: |
           cat > docker-compose.yml << 'EOF'
@@ -103,6 +63,12 @@ jobs:
           services:
             app:
               image: ${DOCKER_USERNAME:-yourname}/yii2-app:${TAG:-latest}
+              volumes:
+                - yii2-app-code:/var/www/basic
+                - yii2-app-runtime:/var/www/basic/runtime
+                - yii2-app-assets:/var/www/basic/web/assets
+              ports:
+                - "9000:9000"  # Expose PHP-FPM port to host for NGINX
               environment:
                 - YII_ENV=${YII_ENV:-prod}
                 - YII_DEBUG=${YII_DEBUG:-false}
@@ -118,21 +84,6 @@ jobs:
                   parallelism: 1
                   delay: 10s
                   order: start-first
-                restart_policy:
-                  condition: on-failure
-
-            nginx:
-              image: nginx:alpine
-              volumes:
-                - ./docker/nginx/conf.d:/etc/nginx/conf.d
-              ports:
-                - "80:80"
-              depends_on:
-                - app
-              networks:
-                - yii2-network
-              deploy:
-                replicas: 1
                 restart_policy:
                   condition: on-failure
 
@@ -158,6 +109,9 @@ jobs:
 
           volumes:
             yii2-db-data:
+            yii2-app-code:
+            yii2-app-runtime:
+            yii2-app-assets:
           EOF
       
       # Create Dockerfile
@@ -205,12 +159,13 @@ jobs:
           # Install dependencies as yii2 user
           USER yii2
           WORKDIR /var/www/basic
-          RUN composer install --no-interaction
+          RUN composer install --no-interaction --no-dev
 
           # Set proper file permissions
           USER root
           RUN chown -R yii2:www-data /var/www/basic
-          RUN chmod -R 755 /var/www/basic/web/assets /var/www/basic/runtime
+          RUN chmod -R 755 /var/www/basic/web
+          RUN chmod -R 775 /var/www/basic/web/assets /var/www/basic/runtime
 
           # Configure PHP-FPM
           COPY ./docker/php-fpm/www.conf /usr/local/etc/php-fpm.d/www.conf
@@ -243,14 +198,67 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
       
+      - name: Copy Yii2 application files to server
+        run: |
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "mkdir -p /var/www/html/yii2"
+          scp -r app/basic/* ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }}:/var/www/html/yii2/
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "sudo chown -R www-data:www-data /var/www/html/yii2"
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "sudo chmod -R 755 /var/www/html/yii2"
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "sudo chmod -R 775 /var/www/html/yii2/runtime /var/www/html/yii2/web/assets"
+      
       - name: Create server directory structure
         run: |
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "mkdir -p /home/${{ secrets.SSH_USER }}/docker/nginx/conf.d"
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "mkdir -p /home/${{ secrets.SSH_USER }}/docker/php-fpm"
       
-      - name: Copy docker-compose.yml and nginx config to server
+      - name: Copy docker-compose.yml and configs to server
         run: |
           scp ./docker-compose.yml ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }}:/home/${{ secrets.SSH_USER }}/docker-compose.yml
-          scp ./docker/nginx/conf.d/default.conf ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }}:/home/${{ secrets.SSH_USER }}/docker/nginx/conf.d/default.conf
+          scp ./docker/php-fpm/www.conf ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }}:/home/${{ secrets.SSH_USER }}/docker/php-fpm/www.conf
+      
+      - name: Create NGINX configuration on server
+        run: |
+          cat > nginx.conf << 'EOF'
+          server {
+              charset utf-8;
+              client_max_body_size 128M;
+
+              listen 80;
+              server_name localhost;
+
+              access_log /var/log/nginx/yii2-access.log;
+              error_log /var/log/nginx/yii2-error.log;
+              
+              root /var/www/html/yii2/web;
+              index index.php;
+
+              location / {
+                  # Redirect everything that isn't a real file to index.php
+                  try_files $uri $uri/ /index.php$is_args$args;
+              }
+
+              # deny accessing php files for the /assets directory
+              location ~ ^/assets/.*\.php$ {
+                  deny all;
+              }
+
+              location ~ \.php$ {
+                  include fastcgi_params;
+                  fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+                  # Connect to the Docker Swarm service using the published port
+                  fastcgi_pass localhost:9000;
+                  try_files $uri =404;
+              }
+
+              location ~* /\. {
+                  deny all;
+              }
+          }
+          EOF
+          scp ./nginx.conf ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }}:/home/${{ secrets.SSH_USER }}/yii2.conf
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "sudo cp /home/${{ secrets.SSH_USER }}/yii2.conf /etc/nginx/sites-available/yii2-app.conf"
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "sudo ln -sf /etc/nginx/sites-available/yii2-app.conf /etc/nginx/sites-enabled/yii2-app.conf"
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "sudo rm -f /etc/nginx/sites-enabled/default"
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "sudo systemctl restart nginx"
       
       - name: Initialize Docker Swarm (if not already)
         run: |
