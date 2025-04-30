@@ -34,12 +34,16 @@ RUN mkdir -p /var/www/basic/web/assets /var/www/basic/runtime && \
     chmod -R 775 /var/www/basic/web/assets /var/www/basic/runtime
 
 # Copy application files (assuming you'll have the Yii2 app at the root)
-COPY --chown=yii2:www-data ./app/basic /var/www/basic
+COPY ./app/basic /var/www/basic
 
-# Install dependencies as yii2 user
+# Set correct permissions for yii2 user
+RUN chown -R yii2:www-data /var/www/basic
+
+# Switch to yii2 user and install dependencies
 USER yii2
 WORKDIR /var/www/basic
 RUN composer install --no-interaction
+
 
 # Set proper file permissions
 USER root
