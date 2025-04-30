@@ -37,14 +37,12 @@ jobs:
         run: |
           scp ./docker-compose.yml ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }}:/home/${{ secrets.SSH_USER }}/docker-compose.yml
       
-      - name: Initialize Docker Swarm (if not already)
-        run: |
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "docker swarm init || echo 'Swarm already initialized'"
-      
       - name: Deploy to production
         run: |
           ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "cd /home/${{ secrets.SSH_USER }} && \
-          docker stack deploy -c docker-compose.yml yii2-app"
+          export DOCKER_USERNAME=${{ secrets.DOCKER_USERNAME }} && \
+          export TAG=${{ github.sha }} && \
+          docker stack deploy -c docker-compose.yml yii2-app --with-registry-auth"
       
       - name: Check deployment status
         run: |
