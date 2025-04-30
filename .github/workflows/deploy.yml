@@ -1,4 +1,4 @@
-name: Build and Deploy
+name: Build and Deploy Yii2 App
 on:
   push:
     branches: [ main ]
@@ -8,6 +8,67 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+      
+      # Download and extract Yii2 Basic Project
+      - name: Create app directory
+        run: mkdir -p app
+        
+      - name: Download Yii2 Basic Project
+        run: |
+          composer create-project --prefer-dist yiisoft/yii2-app-basic app/basic
+      
+      # Configure Yii2 application
+      - name: Configure Yii2 application
+        run: |
+          # Generate a secret key for cookie validation
+          SECRET_KEY=$(openssl rand -base64 32)
+          sed -i "s/'cookieValidationKey' => ''/'cookieValidationKey' => '$SECRET_KEY'/g" app/basic/config/web.php
+          
+          # Configure database connection
+          sed -i "s/'dsn' => 'mysql:host=localhost;dbname=yii2basic'/'dsn' => 'mysql:host=db;dbname=yii2db'/g" app/basic/config/db.php
+          sed -i "s/'username' => 'root'/'username' => 'yii2user'/g" app/basic/config/db.php
+          sed -i "s/'password' => ''/'password' => 'yii2password'/g" app/basic/config/db.php
+      
+      # Create Nginx configuration
+      - name: Create Nginx configuration
+        run: |
+          mkdir -p docker/nginx/conf.d
+          cat > docker/nginx/conf.d/default.conf << 'EOF'
+          server {
+              charset utf-8;
+              client_max_body_size 128M;
+
+              listen 80;
+              server_name localhost;
+
+              root /var/www/basic/web;
+              index index.php;
+
+              access_log /var/log/nginx/yii2-access.log;
+              error_log /var/log/nginx/yii2-error.log;
+
+              location / {
+                  # Redirect everything that isn't a real file to index.php
+                  try_files $uri $uri/ /index.php$is_args$args;
+              }
+
+              # deny accessing php files for the /assets directory
+              location ~ ^/assets/.*\.php$ {
+                  deny all;
+              }
+
+              location ~ \.php$ {
+                  include fastcgi_params;
+                  fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+                  fastcgi_pass app:9000;
+                  try_files $uri =404;
+              }
+
+              location ~* /\. {
+                  deny all;
+              }
+          }
+          EOF
       
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
@@ -33,9 +94,11 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
       
-      - name: Copy docker-compose.yml to server
+      - name: Copy docker-compose.yml and nginx config to server
         run: |
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "mkdir -p /home/${{ secrets.SSH_USER }}/docker/nginx/conf.d"
           scp ./docker-compose.yml ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }}:/home/${{ secrets.SSH_USER }}/docker-compose.yml
+          scp ./docker/nginx/conf.d/default.conf ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }}:/home/${{ secrets.SSH_USER }}/docker/nginx/conf.d/default.conf
       
       - name: Initialize Docker Swarm (if not already)
         run: |
@@ -44,6 +107,10 @@ jobs:
       - name: Deploy to production
         run: |
           ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "cd /home/${{ secrets.SSH_USER }} && \
+          export DOCKER_USERNAME=${{ secrets.DOCKER_USERNAME }} && \
+          export TAG=${{ github.sha }} && \
+          export YII_ENV=prod && \
+          export YII_DEBUG=false && \
           docker stack deploy -c docker-compose.yml yii2-app"
       
       - name: Check deployment status
