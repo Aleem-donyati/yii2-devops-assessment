@@ -1,14 +1,13 @@
 version: '3.8'
 services:
   app:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile
     image: ${DOCKER_USERNAME:-yourname}/yii2-app:${TAG:-latest}
     volumes:
-      - ./app/basic:/var/www/basic
-      - ./app/basic/runtime:/var/www/basic/runtime
-      - ./app/basic/web/assets:/var/www/basic/web/assets
+      - yii2-app-code:/var/www/basic
+      - yii2-app-runtime:/var/www/basic/runtime
+      - yii2-app-assets:/var/www/basic/web/assets
+    ports:
+      - "9000:9000"  # Expose PHP-FPM port to host for NGINX
     environment:
       - YII_ENV=${YII_ENV:-prod}
       - YII_DEBUG=${YII_DEBUG:-false}
@@ -30,22 +29,6 @@ services:
         parallelism: 1
         delay: 10s
         order: start-first
-      restart_policy:
-        condition: on-failure
-
-  nginx:
-    image: nginx:alpine
-    volumes:
-      - ./app/basic/web:/var/www/basic/web
-      - ./docker/nginx/conf.d:/etc/nginx/conf.d
-    ports:
-      - "80:80"
-    depends_on:
-      - app
-    networks:
-      - yii2-network
-    deploy:
-      replicas: 1
       restart_policy:
         condition: on-failure
 
@@ -71,3 +54,6 @@ networks:
 
 volumes:
   yii2-db-data:
+  yii2-app-code:
+  yii2-app-runtime:
+  yii2-app-assets:
