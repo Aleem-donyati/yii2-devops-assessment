@@ -2,6 +2,9 @@ name: Build and Deploy Yii2 App
 on:
   push:
     branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
@@ -32,6 +35,11 @@ jobs:
           sed -i "s/'dsn' => 'mysql:host=localhost;dbname=yii2basic'/'dsn' => 'mysql:host=db;dbname=yii2db'/g" app/basic/config/db.php
           sed -i "s/'username' => 'root'/'username' => 'yii2user'/g" app/basic/config/db.php
           sed -i "s/'password' => ''/'password' => 'yii2password'/g" app/basic/config/db.php
+          
+          # Set proper permissions for files
+          chmod -R 777 app/basic/vendor || true
+          chmod -R 777 app/basic/runtime || true
+          chmod -R 777 app/basic/web/assets || true
       
       # Create PHP-FPM configuration
       - name: Create PHP-FPM configuration
@@ -55,7 +63,7 @@ jobs:
           php_admin_flag[log_errors] = on
           EOF
       
-      # Create docker-compose.yml (without NGINX service)
+      # Create docker-compose.yml with improved configuration
       - name: Create docker-compose.yml
         run: |
           cat > docker-compose.yml << 'EOF'
@@ -64,7 +72,6 @@ jobs:
             app:
               image: ${DOCKER_USERNAME:-yourname}/yii2-app:${TAG:-latest}
               volumes:
-                - yii2-app-code:/var/www/basic
                 - yii2-app-runtime:/var/www/basic/runtime
                 - yii2-app-assets:/var/www/basic/web/assets
               ports:
@@ -78,6 +85,12 @@ jobs:
                 - DB_PASSWORD=yii2password
               networks:
                 - yii2-network
+              healthcheck:
+                test: ["CMD", "curl", "-f", "http://localhost:9000/ping"]
+                interval: 1m
+                timeout: 10s
+                retries: 3
+                start_period: 40s
               deploy:
                 replicas: 2
                 update_config:
@@ -109,7 +122,6 @@ jobs:
 
           volumes:
             yii2-db-data:
-            yii2-app-code:
             yii2-app-runtime:
             yii2-app-assets:
           EOF
@@ -151,24 +163,33 @@ jobs:
           # Create app directories with proper permissions
           RUN mkdir -p /var/www/basic/web/assets /var/www/basic/runtime && \
               chown -R yii2:www-data /var/www/basic && \
-              chmod -R 775 /var/www/basic/web/assets /var/www/basic/runtime
+              chmod -R 775 /var/www/basic
 
           # Copy application files
           COPY ./app/basic /var/www/basic
 
-          # Install dependencies as yii2 user
+          # Ensure correct ownership of all files
+          RUN chown -R yii2:www-data /var/www/basic
+
+          # Switch to yii2 user and install dependencies
           USER yii2
           WORKDIR /var/www/basic
-          RUN composer install --no-interaction --no-dev
+
+          # Install with relaxed permissions to avoid errors
+          RUN composer install --no-interaction --no-dev --ignore-platform-reqs || \
+              (chmod -R 777 /var/www/basic/vendor && composer install --no-interaction --no-dev --ignore-platform-reqs)
 
           # Set proper file permissions
           USER root
-          RUN chown -R yii2:www-data /var/www/basic
           RUN chmod -R 755 /var/www/basic/web
           RUN chmod -R 775 /var/www/basic/web/assets /var/www/basic/runtime
 
           # Configure PHP-FPM
           COPY ./docker/php-fpm/www.conf /usr/local/etc/php-fpm.d/www.conf
+
+          # Health check
+          HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+              CMD curl -f http://localhost:9000/ping || exit 1
 
           EXPOSE 9000
           CMD ["php-fpm"]
@@ -188,34 +209,46 @@ jobs:
         with:
           context: .
           file: ./docker/Dockerfile
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ secrets.DOCKER_USERNAME }}/yii2-app:latest,${{ secrets.DOCKER_USERNAME }}/yii2-app:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
       
+      # Only proceed with deployment if this is a push to main, not a pull request
       - name: Set up SSH
+        if: github.event_name != 'pull_request'
         run: |
           mkdir -p ~/.ssh/
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
       
-      - name: Copy Yii2 application files to server
+      - name: Create Yii2 application directory on server
+        if: github.event_name != 'pull_request'
         run: |
           ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "mkdir -p /var/www/html/yii2"
+      
+      - name: Copy Yii2 application files to server
+        if: github.event_name != 'pull_request'
+        run: |
           scp -r app/basic/* ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }}:/var/www/html/yii2/
           ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "sudo chown -R www-data:www-data /var/www/html/yii2"
           ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "sudo chmod -R 755 /var/www/html/yii2"
           ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "sudo chmod -R 775 /var/www/html/yii2/runtime /var/www/html/yii2/web/assets"
       
       - name: Create server directory structure
+        if: github.event_name != 'pull_request'
         run: |
           ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "mkdir -p /home/${{ secrets.SSH_USER }}/docker/php-fpm"
       
       - name: Copy docker-compose.yml and configs to server
+        if: github.event_name != 'pull_request'
         run: |
           scp ./docker-compose.yml ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }}:/home/${{ secrets.SSH_USER }}/docker-compose.yml
           scp ./docker/php-fpm/www.conf ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }}:/home/${{ secrets.SSH_USER }}/docker/php-fpm/www.conf
       
       - name: Create NGINX configuration on server
+        if: github.event_name != 'pull_request'
         run: |
           cat > nginx.conf << 'EOF'
           server {
@@ -261,10 +294,12 @@ jobs:
           ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "sudo systemctl restart nginx"
       
       - name: Initialize Docker Swarm (if not already)
+        if: github.event_name != 'pull_request'
         run: |
           ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "docker swarm init --advertise-addr=$(hostname -I | awk '{print $1}') || echo 'Swarm already initialized'"
       
       - name: Deploy to production
+        if: github.event_name != 'pull_request'
         run: |
           ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "cd /home/${{ secrets.SSH_USER }} && \
           DOCKER_USERNAME=${{ secrets.DOCKER_USERNAME }} \
@@ -274,5 +309,6 @@ jobs:
           docker stack deploy -c docker-compose.yml yii2-app"
       
       - name: Check deployment status
+        if: github.event_name != 'pull_request'
         run: |
           ssh ${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }} "docker service ls"
