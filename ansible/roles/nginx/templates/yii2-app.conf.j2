@@ -1,22 +1,35 @@
 server {
+    charset utf-8;
+    client_max_body_size 128M;
+
     listen 80;
     server_name {{ domain_name }};
-    
+
     access_log /var/log/nginx/yii2-access.log;
     error_log /var/log/nginx/yii2-error.log;
-    root /var/www/html;
-    index index.php index.html;
     
+    root /var/www/html/yii2/web;
+    index index.php;
+
     location / {
-        proxy_pass http://localhost:9000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        # Redirect everything that isn't a real file to index.php
+        try_files $uri $uri/ /index.php$is_args$args;
     }
 
-    error_page 500 502 503 504 /50x.html;
-    location = /50x.html {
-        root /usr/share/nginx/html;
+    # deny accessing php files for the /assets directory
+    location ~ ^/assets/.*\.php$ {
+        deny all;
+    }
+
+    location ~ \.php$ {
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        # Connect to the Docker Swarm service using the published port
+        fastcgi_pass localhost:9000;
+        try_files $uri =404;
+    }
+
+    location ~* /\. {
+        deny all;
     }
 }
