@@ -96,8 +96,81 @@ jobs:
       - name: Create docker-compose.yml
         run: |
           cat > docker-compose.yml << 'EOF'
-          # Copy contents from your existing docker-compose.yml
+          version: '3.8'
+          services:
+            app:
+              build:
+                context: .
+                dockerfile: docker/Dockerfile
+              image: \${DOCKER_USERNAME:-yourname}/yii2-app:\${TAG:-latest}
+              volumes:
+                - ./app/basic:/var/www/basic
+                - ./app/basic/runtime:/var/www/basic/runtime
+                - ./app/basic/web/assets:/var/www/basic/web/assets
+              environment:
+                - YII_ENV=\${YII_ENV:-prod}
+                - YII_DEBUG=\${YII_DEBUG:-false}
+                - DB_HOST=db
+                - DB_NAME=yii2db
+                - DB_USER=yii2user
+                - DB_PASSWORD=yii2password
+              networks:
+                - yii2-network
+              healthcheck:
+                test: ["CMD", "curl", "-f", "http://localhost:9000/ping"]
+                interval: 1m
+                timeout: 10s
+                retries: 3
+                start_period: 40s
+              deploy:
+                replicas: 2
+                update_config:
+                  parallelism: 1
+                  delay: 10s
+                  order: start-first
+                restart_policy:
+                  condition: on-failure
+      
+            nginx:
+              image: nginx:alpine
+              volumes:
+                - ./app/basic/web:/var/www/basic/web
+                - ./docker/nginx/conf.d:/etc/nginx/conf.d
+              ports:
+                - "80:80"
+              depends_on:
+                - app
+              networks:
+                - yii2-network
+              deploy:
+                replicas: 1
+                restart_policy:
+                  condition: on-failure
+      
+            db:
+              image: mysql:8.0
+              volumes:
+                - yii2-db-data:/var/lib/mysql
+              environment:
+                - MYSQL_ROOT_PASSWORD=rootpassword
+                - MYSQL_DATABASE=yii2db
+                - MYSQL_USER=yii2user
+                - MYSQL_PASSWORD=yii2password
+              networks:
+                - yii2-network
+              deploy:
+                replicas: 1
+                restart_policy:
+                  condition: on-failure
+      
+          networks:
+            yii2-network:
+              driver: overlay
+      
+          volumes:
+            yii2-db-data:
           EOF
+
       
       - name: Copy docker-compose.yml and nginx config to server
         run: |
