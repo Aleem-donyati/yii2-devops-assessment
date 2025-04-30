@@ -3,15 +3,24 @@
   hosts: ec2
   become: yes
   vars:
-    app_dir: /opt/{{ app_name }}
+    app_dir: /opt/yii2-app
     docker_compose_version: "2.17.3"
-    github_repo: https://github.com/Aleem-donyati/yii2-devops-assessment.git
+    github_repo: https://github.com/yourusername/yii2-devops-assessment.git
+    domain_name: "your-domain.com"  # Replace with your actual domain
+    db_host: db
+    db_name: yii2db
+    db_user: yii2user
+    db_password: yii2password
+    yii_env: prod
+    yii_debug: "false"
+  
   roles:
     - common
     - docker
     - nginx
     - swarm
-  post_tasks:
+  
+  tasks:
     - name: Create app directory
       file:
         path: "{{ app_dir }}"
@@ -24,10 +33,37 @@
         dest: "{{ app_dir }}"
         version: main
         
+    - name: Create nginx config directory
+      file:
+        path: "{{ app_dir }}/docker/nginx/conf.d"
+        state: directory
+        mode: '0755'
+        
+    - name: Create Nginx configuration for Yii2
+      template:
+        src: yii2-app.conf.j2
+        dest: "{{ app_dir }}/docker/nginx/conf.d/default.conf"
+        
+    - name: Set environment variables for deployment
+      shell: |
+        echo "export DOCKER_USERNAME=yourname" > {{ app_dir }}/.env
+        echo "export TAG=latest" >> {{ app_dir }}/.env
+        echo "export YII_ENV={{ yii_env }}" >> {{ app_dir }}/.env
+        echo "export YII_DEBUG={{ yii_debug }}" >> {{ app_dir }}/.env
+        echo "export DB_HOST={{ db_host }}" >> {{ app_dir }}/.env
+        echo "export DB_NAME={{ db_name }}" >> {{ app_dir }}/.env
+        echo "export DB_USER={{ db_user }}" >> {{ app_dir }}/.env
+        echo "export DB_PASSWORD={{ db_password }}" >> {{ app_dir }}/.env
+      
+    - name: Load environment variables
+      shell: |
+        source {{ app_dir }}/.env
+      
     - name: Deploy the stack
-      command: "docker stack deploy -c {{ app_dir }}/docker-compose.yml {{ app_name }}"
-      args:
-        chdir: "{{ app_dir }}"
+      shell: |
+        cd {{ app_dir }} && \
+        source ./.env && \
+        docker stack deploy -c docker-compose.yml yii2-app
       register: stack_deploy
       
     - name: Show deployment result
