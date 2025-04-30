@@ -93,6 +93,11 @@ jobs:
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
+      - name: Create docker-compose.yml
+        run: |
+          cat > docker-compose.yml << 'EOF'
+          # Copy contents from your existing docker-compose.yml
+          EOF
       
       - name: Copy docker-compose.yml and nginx config to server
         run: |
