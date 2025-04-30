@@ -7,7 +7,7 @@
     app_dir: /opt/{{ app_name }}
     domain_name: "{{ ansible_host }}"  # Use server IP as domain by default
     docker_compose_version: "2.17.3"
-    github_repo: https://github.com/yourusername/yii2-devops-assessment.git
+    github_repo: https://github.com/Aleem-donyati/yii2-devops-assessment.git
   
   roles:
     - common
