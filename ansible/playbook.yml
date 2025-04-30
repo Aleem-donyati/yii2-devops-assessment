@@ -4,9 +4,10 @@
   become: yes
   vars:
     app_dir: /opt/yii2-app
+    www_dir: /var/www/html/yii2
     docker_compose_version: "2.17.3"
-    github_repo: https://github.com/yourusername/yii2-devops-assessment.git
-    domain_name: "your-domain.com"  # Replace with your actual domain
+    github_repo: https://github.com/Aleem-donyati/yii2-devops-assessment.git
+    domain_name: "{{ hostvars[inventory_hostname]['ansible_host'] }}"  # Use server IP by default
     db_host: db
     db_name: yii2db
     db_user: yii2user
@@ -26,6 +27,14 @@
         path: "{{ app_dir }}"
         state: directory
         mode: '0755'
+    
+    - name: Create www directory for Yii2
+      file:
+        path: "{{ www_dir }}"
+        state: directory
+        mode: '0755'
+        owner: www-data
+        group: www-data
         
     - name: Clone application repository
       git:
@@ -33,20 +42,75 @@
         dest: "{{ app_dir }}"
         version: main
         
-    - name: Create nginx config directory
+    - name: Create directories for Docker configs
       file:
-        path: "{{ app_dir }}/docker/nginx/conf.d"
+        path: "{{ app_dir }}/{{ item }}"
         state: directory
         mode: '0755'
+      with_items:
+        - docker/php-fpm
+        - app/basic/runtime
+        - app/basic/web/assets
         
-    - name: Create Nginx configuration for Yii2
+    # Download and set up Yii2 basic application
+    - name: Download Yii2 Basic Project
+      shell: |
+        cd {{ app_dir }}
+        composer create-project --prefer-dist yiisoft/yii2-app-basic app/basic
+      args:
+        creates: "{{ app_dir }}/app/basic/composer.json"
+      
+    - name: Configure Yii2 application
+      shell: |
+        # Generate a secret key for cookie validation
+        SECRET_KEY=$(openssl rand -base64 32)
+        sed -i "s/'cookieValidationKey' => ''/'cookieValidationKey' => '$SECRET_KEY'/g" {{ app_dir }}/app/basic/config/web.php
+        
+        # Configure database connection
+        sed -i "s/'dsn' => 'mysql:host=localhost;dbname=yii2basic'/'dsn' => 'mysql:host=db;dbname=yii2db'/g" {{ app_dir }}/app/basic/config/db.php
+        sed -i "s/'username' => 'root'/'username' => 'yii2user'/g" {{ app_dir }}/app/basic/config/db.php
+        sed -i "s/'password' => ''/'password' => 'yii2password'/g" {{ app_dir }}/app/basic/config/db.php
+    
+    # Copy PHP-FPM configuration
+    - name: Create PHP-FPM configuration
       template:
-        src: yii2-app.conf.j2
-        dest: "{{ app_dir }}/docker/nginx/conf.d/default.conf"
+        src: php-fpm/www.conf.j2
+        dest: "{{ app_dir }}/docker/php-fpm/www.conf"
+        mode: '0644'
+        
+    # Set up NGINX to serve the Yii2 application
+    - name: Configure NGINX for Yii2 app
+      template:
+        src: nginx/yii2-app.conf.j2
+        dest: /etc/nginx/sites-available/{{ app_name }}.conf
+        mode: '0644'
+        
+    - name: Enable NGINX site
+      file:
+        src: /etc/nginx/sites-available/{{ app_name }}.conf
+        dest: /etc/nginx/sites-enabled/{{ app_name }}.conf
+        state: link
+        
+    - name: Remove default NGINX site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+        
+    - name: Create Dockerfile
+      template:
+        src: Dockerfile.j2
+        dest: "{{ app_dir }}/docker/Dockerfile"
+        mode: '0644'
+        
+    - name: Create docker-compose.yml
+      template:
+        src: docker-compose.yml.j2
+        dest: "{{ app_dir }}/docker-compose.yml"
+        mode: '0644'
         
     - name: Set environment variables for deployment
       shell: |
-        echo "export DOCKER_USERNAME=yourname" > {{ app_dir }}/.env
+        echo "export DOCKER_USERNAME={{ docker_username }}" > {{ app_dir }}/.env
         echo "export TAG=latest" >> {{ app_dir }}/.env
         echo "export YII_ENV={{ yii_env }}" >> {{ app_dir }}/.env
         echo "export YII_DEBUG={{ yii_debug }}" >> {{ app_dir }}/.env
@@ -59,12 +123,47 @@
       shell: |
         source {{ app_dir }}/.env
       
+    - name: Build the Docker image locally
+      shell: |
+        cd {{ app_dir }} && \
+        docker build -t {{ docker_username }}/yii2-app:latest -f docker/Dockerfile .
+      
     - name: Deploy the stack
       shell: |
         cd {{ app_dir }} && \
         source ./.env && \
         docker stack deploy -c docker-compose.yml yii2-app
       register: stack_deploy
+      
+    # Create a symbolic link from the Docker volume to the www directory
+    - name: Copy Yii2 files to www directory for NGINX
+      synchronize:
+        src: "{{ app_dir }}/app/basic/"
+        dest: "{{ www_dir }}/"
+      
+    - name: Set proper permissions for web directory
+      file:
+        path: "{{ www_dir }}"
+        owner: www-data
+        group: www-data
+        recurse: yes
+        mode: '0755'
+      
+    - name: Make runtime and assets directories writable
+      file:
+        path: "{{ www_dir }}/{{ item }}"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0775'
+      with_items:
+        - runtime
+        - web/assets
+        
+    - name: Restart NGINX
+      systemd:
+        name: nginx
+        state: restarted
       
     - name: Show deployment result
       debug:
