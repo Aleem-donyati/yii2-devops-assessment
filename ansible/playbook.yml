@@ -3,35 +3,51 @@
   hosts: ec2
   become: yes
   vars:
+    app_name: yii2-app
     app_dir: /opt/{{ app_name }}
+    domain_name: "{{ ansible_host }}"  # Use server IP as domain by default
     docker_compose_version: "2.17.3"
     github_repo: https://github.com/yourusername/yii2-devops-assessment.git
-
+  
   roles:
     - common
     - docker
     - nginx
     - swarm
-
-  post_tasks:
-    - name: Create app directory
+  
+  tasks:
+    # Configure NGINX for Yii2
+    - name: Create Yii2 web root directory
       file:
-        path: "{{ app_dir }}"
+        path: /var/www/basic/web
         state: directory
         mode: '0755'
-        
+        owner: www-data
+        group: www-data
+        recurse: yes
+    
+    # Clone repository
     - name: Clone application repository
       git:
         repo: "{{ github_repo }}"
         dest: "{{ app_dir }}"
         version: main
-        
+      
+    # Deploy the stack
     - name: Deploy the stack
-      command: "docker stack deploy -c {{ app_dir }}/docker-compose.yml {{ app_name }}"
+      environment:
+        DOCKER_USERNAME: "{{ lookup('env', 'DOCKER_USERNAME') | default('yourname') }}"
+      command: "docker stack deploy -c {{ app_dir }}/docker-compose.yml {{ app_name }} --with-registry-auth"
       args:
         chdir: "{{ app_dir }}"
       register: stack_deploy
-      
-    - name: Show deployment result
+    
+    # Verify the deployment
+    - name: Check stack services
+      command: docker service ls
+      register: service_status
+      changed_when: false
+    
+    - name: Show service status
       debug:
-        var: stack_deploy.stdout_lines
+        var: service_status.stdout_lines
